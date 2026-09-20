@@ -1,0 +1,102 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: siata_postgis
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./data:/data:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - siata_net
+
+  loader:
+    image: ghcr.io/osgeo/gdal:alpine-small-latest
+    container_name: siata_loader
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./data:/data:ro
+      - ./loader:/loader:ro
+    entrypoint: ["sh", "/loader/load.sh"]
+    restart: "no"
+    networks:
+      - siata_net
+  geoserver:
+    image: docker.osgeo.org/geoserver:2.25.2
+    container_name: siata_geoserver
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GEOSERVER_ADMIN_USER: ${GEOSERVER_ADMIN_USER}
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD}
+      SKIP_DEMO_DATA: "true"
+      CORS_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - geoserver_data:/opt/geoserver_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/geoserver/web/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks:
+      - siata_net
+
+  backend:
+    build: ./backend
+    container_name: siata_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      loader:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    ports:
+      - "8000:8000"
+    networks:
+      - siata_net
+
+  frontend:
+    image: nginx:alpine
+    container_name: siata_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "80:80"
+    networks:
+      - siata_net
+
+volumes:
+  pgdata:
+  geoserver_data:
+
+networks:
+  siata_net:
+    driver: bridge

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Entorno
+.env
+
+# Terraform
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+*.tfvars
+*.pem
+
+# Datos temporales de GeoServer
+geoserver/data_dir/
+
+# Sistema
+.DS_Store
+.pytest_cache/
+
+# Archivos de bloqueo de ArcGIS
+*.lock
