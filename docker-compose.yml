@@ -64,6 +64,29 @@ services:
     networks:
       - siata_net
 
+  geoserver-init:
+    build: ./geoserver-init
+    container_name: siata_geoserver_init
+    depends_on:
+      geoserver:
+        condition: service_healthy
+      loader:
+        condition: service_completed_successfully
+    environment:
+      GEOSERVER_HOST: geoserver
+      GEOSERVER_ADMIN_USER: ${GEOSERVER_ADMIN_USER}
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD}
+      GEOSERVER_WORKSPACE: ${GEOSERVER_WORKSPACE}
+      GEOSERVER_DATASTORE: ${GEOSERVER_DATASTORE}
+      GEOSERVER_LAYER: ${GEOSERVER_LAYER}
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: "no"
+    networks:
+      - siata_net
+    
   backend:
     build: ./backend
     container_name: siata_backend
@@ -72,6 +95,8 @@ services:
       db:
         condition: service_healthy
       loader:
+        condition: service_completed_successfully
+      geoserver-init:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: ${DATABASE_URL}

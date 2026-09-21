@@ -3,9 +3,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 
-# echo_pool y pool_pre_ping evitan conexiones "muertas" si el contenedor
-# de la base de datos se reinicia mientras el backend sigue vivo.
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+# client_encoding=utf8 fuerza explicitamente la codificacion del cliente
+# psycopg hacia PostgreSQL, evitando problemas de doble codificacion
+# (mojibake) en cadenas con caracteres especiales del espanol.
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    connect_args={"client_encoding": "utf8"},
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
