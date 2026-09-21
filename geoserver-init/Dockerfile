@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 WORKDIR /scripts
 COPY publicar.sh .
+COPY coberturas.sld .
 RUN chmod +x publicar.sh
 
 ENTRYPOINT ["sh", "/scripts/publicar.sh"]

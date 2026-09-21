@@ -84,6 +84,32 @@ else
         "$GS_URL/workspaces/$WS/datastores/$DS/featuretypes"
 fi
 
+# ---------------------------------------------------------------------
+# 4. Estilo (SLD): 23 clases con colores oficiales IDEAM, por nivel_3
+# ---------------------------------------------------------------------
+STYLE_NAME="coberturas_clc"
+
+if curl -s -f -u "$GS_AUTH" "$GS_URL/workspaces/$WS/styles/$STYLE_NAME.json" > /dev/null 2>&1; then
+    echo "[geoserver-init] Estilo '$STYLE_NAME' ya existe, se actualiza el SLD..."
+    curl -s -f -u "$GS_AUTH" -X PUT \
+        -H "Content-Type: application/vnd.ogc.sld+xml" \
+        --data-binary @/scripts/coberturas.sld \
+        "$GS_URL/workspaces/$WS/styles/$STYLE_NAME"
+else
+    echo "[geoserver-init] Creando estilo '$STYLE_NAME'..."
+    curl -s -f -u "$GS_AUTH" -X POST \
+        -H "Content-Type: application/vnd.ogc.sld+xml" \
+        --data-binary @/scripts/coberturas.sld \
+        "$GS_URL/workspaces/$WS/styles?name=$STYLE_NAME"
+fi
+
+echo "[geoserver-init] Asignando estilo '$STYLE_NAME' como estilo por defecto de la capa..."
+curl -s -f -u "$GS_AUTH" -X PUT \
+    -H "Content-Type: application/json" \
+    -d "{\"layer\": {\"defaultStyle\": {\"name\": \"$STYLE_NAME\", \"workspace\": \"$WS\"}}}" \
+    "$GS_URL/layers/$WS:$LAYER"
+
+echo "[geoserver-init] Estilo aplicado correctamente."
 echo "[geoserver-init] Publicacion OGC completada."
 echo "[geoserver-init] WMS:  $GS_URL/../$WS/wms?service=WMS&version=1.1.0&request=GetCapabilities"
 echo "[geoserver-init] WFS:  $GS_URL/../$WS/wfs?service=WFS&version=2.0.0&request=GetCapabilities"
