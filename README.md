@@ -526,7 +526,3 @@ Aspectos sugeridos o producidos con asistencia de IA que requirieron verificaci�
 - **Disponibilidad de imágenes.** Ante fallos intermitentes de resolución DNS de BuildKit al descargar imágenes nuevas, el servicio `geoserver-init` se construyó sobre la imagen base de Python ya disponible localmente, en lugar de depender de una imagen adicional.
 - **Experiencia de usuario del geovisor.** El diseño inicial usaba un único panel donde las estadísticas globales reemplazaban el resultado de la consulta del usuario. Se rediseñó en secciones independientes: la consulta interactiva arriba y el resumen general de la capa, cargado automáticamente, debajo.
 - **Decisiones de alcance propias.** Selección del recorte de Medellín y preparación del insumo en ArcGIS; uso de EPSG:9377 como sistema métrico nacional; incorporación de mapas base seleccionables, control de opacidad y consulta por rectángulo como funcionalidades adicionales del visor.
-
-### Compromiso de sustentación
-
-Toda decisión arquitectónica y línea de código es objeto de sustentación técnica en la fase de entrevista. El candidato asume la autoría y responsabilidad íntegra sobre la solución entregada.
