@@ -11,18 +11,19 @@ Solución orquestada en contenedores que integra una base de datos espacial (**P
 ## Tabla de contenido
 
 1. [Despliegue en un solo paso](#1-despliegue-en-un-solo-paso)
-2. [URLs del entorno local](#2-urls-del-entorno-local)
-3. [Arquitectura](#3-arquitectura)
-4. [Tecnologías utilizadas](#4-tecnologías-utilizadas)
-5. [Estructura del repositorio](#5-estructura-del-repositorio)
-6. [Base de datos espacial](#6-base-de-datos-espacial)
-7. [Endpoints del backend y parámetros de prueba](#7-endpoints-del-backend-y-parámetros-de-prueba)
-8. [Servicios OGC (GeoServer)](#8-servicios-ogc-geoserver)
-9. [Geovisor web](#9-geovisor-web)
-10. [Decisiones técnicas y justificación](#10-decisiones-técnicas-y-justificación)
-11. [Limitaciones conocidas](#11-limitaciones-conocidas)
-12. [Solución de problemas](#12-solución-de-problemas)
-13. [Declaración obligatoria de uso de asistentes de IA](#13-declaración-obligatoria-de-uso-de-asistentes-de-inteligencia-artificial)
+2. [Despliegue en la nube (AWS)](#2-despliegue-en-la-nube-aws)
+3. [URLs del entorno local](#3-urls-del-entorno-local)
+4. [Arquitectura](#4-arquitectura)
+5. [Tecnologías utilizadas](#5-tecnologías-utilizadas)
+6. [Estructura del repositorio](#6-estructura-del-repositorio)
+7. [Base de datos espacial](#7-base-de-datos-espacial)
+8. [Endpoints del backend y parámetros de prueba](#8-endpoints-del-backend-y-parámetros-de-prueba)
+9. [Servicios OGC (GeoServer)](#9-servicios-ogc-geoserver)
+10. [Geovisor web](#10-geovisor-web)
+11. [Decisiones técnicas y justificación](#11-decisiones-técnicas-y-justificación)
+12. [Limitaciones conocidas](#12-limitaciones-conocidas)
+13. [Solución de problemas](#13-solución-de-problemas)
+14. [Declaración obligatoria de uso de asistentes de IA](#14-declaración-obligatoria-de-uso-de-asistentes-de-inteligencia-artificial)
 
 ---
 
@@ -73,7 +74,75 @@ docker compose up -d --build
 
 ---
 
-## 2. URLs del entorno local
+## 2. Despliegue en la nube (AWS)
+
+### URL de la aplicación desplegada
+
+**Geovisor en producción:** [http://44.222.114.10/](http://44.222.114.10/)
+**Backend — documentación:** [http://44.222.114.10:8000/docs](http://44.222.114.10:8000/docs)
+**GeoServer — administración:** [http://44.222.114.10:8080/geoserver/web/](http://44.222.114.10:8080/geoserver/web/)
+
+> **Nota:** la URL usa HTTP (no HTTPS) y expone directamente los puertos de cada servicio, sin dominio propio ni proxy inverso — una simplificación consciente y documentada en la sección [Limitaciones conocidas](#12-limitaciones-conocidas), apropiada para el alcance de esta prueba técnica.
+
+### Proveedor y arquitectura de despliegue
+
+**Proveedor:** AWS (Amazon Web Services), región `us-east-1`. Una única instancia EC2 (`t3.small`, 2 GB RAM, 20 GB de disco, Ubuntu 22.04) ejecuta el mismo `docker-compose.yml` usado en desarrollo local — los 6 servicios (`db`, `loader`, `geoserver`, `geoserver-init`, `backend`, `frontend`) corren dentro de la misma instancia, comunicándose por la red interna de Docker. No se usan servicios gestionados (RDS, ECS) para mantener el despliegue simple y dentro de los créditos gratuitos de una cuenta nueva de AWS.
+
+Se eligió `t3.small` en lugar de `t3.micro` porque GeoServer (Java/Tomcat) requiere más memoria de la que ofrece la instancia más pequeña; con 1 GB de RAM el arranque de GeoServer es propenso a fallar.
+
+```
+                          ┌───────────────────────────────────────────┐
+                          │        AWS EC2 (t3.small, us-east-1)       │
+                          │                                             │
+   Internet  :80  ────────┼──▶  frontend (Nginx)  ──▶  backend (FastAPI) │
+             :8000 ───────┼──▶  backend (FastAPI)  ──▶       │           │
+             :8080 ───────┼──▶  geoserver ──────────────────┼──▶  db     │
+                          │                    Docker Compose network   │
+                          └───────────────────────────────────────────┘
+```
+
+### Infraestructura como Código (Terraform)
+
+Ubicada en `infra/`. Provisiona exactamente 2 recursos:
+
+- `aws_instance.siata_server`: la instancia EC2, con un script `user_data` que instala Docker, clona este repositorio y ejecuta `docker compose up -d --build` automáticamente al arrancar — el mismo levantamiento desatendido que en local, sin pasos manuales adicionales (a diferencia de otros despliegues, este stack no requiere ninguna migración o seed posterior: la carga de datos y la publicación OGC ya están automatizadas dentro del propio `docker compose up`).
+- `aws_security_group.siata_sg`: reglas de firewall que permiten tráfico entrante en los puertos 22 (SSH), 80 (geovisor), 8000 (backend) y 8080 (GeoServer).
+
+**Para desplegar desde cero:**
+
+```bash
+cd infra
+terraform init
+terraform plan
+terraform apply
+```
+
+Requiere: AWS CLI configurado (`aws configure`) con un usuario IAM de permisos acotados (no la cuenta raíz), un Key Pair de EC2 ya creado, y un archivo `infra/terraform.tfvars` (no versionado, ver `.gitignore`) con:
+
+```hcl
+key_pair_name            = "nombre-de-tu-key-pair"
+geoserver_admin_password = "tu_contraseña_geoserver"
+postgres_password        = "tu_contraseña_postgres"
+```
+
+**Para destruir toda la infraestructura y detener cualquier cobro:**
+
+```bash
+cd infra
+terraform destroy
+```
+
+### Decisiones y limitaciones del despliegue (documentadas, no accidentales)
+
+- **Una sola instancia, sin alta disponibilidad ni balanceo de carga.** Apropiado para el alcance de una prueba técnica; en un entorno productivo se separaría la base de datos a un servicio gestionado (RDS con PostGIS) y GeoServer/backend correrían en instancias independientes, escalables por separado.
+- **Sin HTTPS.** Requeriría un dominio propio y un proxy inverso (Nginx/Caddy) con certificado, o un Load Balancer de AWS con ACM — fuera del alcance de tiempo de esta prueba.
+- **Contraseñas pasadas por `user_data`.** AWS almacena su contenido en texto plano, accesible por cualquiera con permisos de lectura sobre la instancia dentro de la cuenta; en producción se usaría AWS Secrets Manager o Parameter Store.
+- **Puertos de administración expuestos públicamente** (GeoServer, backend) para facilitar la revisión de la prueba; en producción solo el puerto 80 (o 443) debería ser público, con los demás accesibles únicamente desde la red interna.
+- **Costo:** con los créditos de bienvenida de una cuenta AWS nueva (hasta $200 USD), el costo de esta infraestructura durante el período de evaluación es efectivamente $0. Fuera de esos créditos, una instancia `t3.small` cuesta aproximadamente $15 USD/mes.
+
+---
+
+## 3. URLs del entorno local
 
 | Componente | URL |
 |---|---|
@@ -89,7 +158,7 @@ Las credenciales de GeoServer y PostgreSQL son las definidas en el archivo `.env
 
 ---
 
-## 3. Arquitectura
+## 4. Arquitectura
 
 ```
                                ┌──────────────────────────────┐
@@ -132,7 +201,7 @@ Las credenciales de GeoServer y PostgreSQL son las definidas en el archivo `.env
 
 ---
 
-## 4. Tecnologías utilizadas
+## 5. Tecnologías utilizadas
 
 | Capa | Tecnología | Versión | Uso |
 |---|---|---|---|
@@ -149,7 +218,7 @@ Las credenciales de GeoServer y PostgreSQL son las definidas en el archivo `.env
 
 ---
 
-## 5. Estructura del repositorio
+## 6. Estructura del repositorio
 
 ```
 siata_webgis/
@@ -183,7 +252,7 @@ siata_webgis/
 
 ---
 
-## 6. Base de datos espacial
+## 7. Base de datos espacial
 
 ### Tabla `coberturas`
 
@@ -211,7 +280,7 @@ siata_webgis/
 
 ---
 
-## 7. Endpoints del backend y parámetros de prueba
+## 8. Endpoints del backend y parámetros de prueba
 
 Documentación interactiva completa en **http://localhost:8000/docs**.
 
@@ -309,7 +378,7 @@ curl http://localhost:8000/analisis/estadisticas
 
 ---
 
-## 8. Servicios OGC (GeoServer)
+## 9. Servicios OGC (GeoServer)
 
 La capa `siata:coberturas` se publica automáticamente al levantar el entorno.
 
@@ -347,7 +416,7 @@ El estilo categoriza por el campo `nivel_3`, igual que la capa oficial del IDEAM
 
 ---
 
-## 9. Geovisor web
+## 10. Geovisor web
 
 Disponible en **http://localhost/**.
 
@@ -366,7 +435,7 @@ El geovisor construye las URLs del backend y de GeoServer a partir del host desd
 
 ---
 
-## 10. Decisiones técnicas y justificación
+## 11. Decisiones técnicas y justificación
 
 ### Base de datos
 
@@ -403,7 +472,7 @@ El geovisor construye las URLs del backend y de GeoServer a partir del host desd
 
 ---
 
-## 11. Limitaciones conocidas
+## 12. Limitaciones conocidas
 
 Aspectos identificados conscientemente y fuera del alcance de la prueba:
 
@@ -415,7 +484,7 @@ Aspectos identificados conscientemente y fuera del alcance de la prueba:
 
 ---
 
-## 12. Solución de problemas
+## 13. Solución de problemas
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
@@ -428,7 +497,7 @@ Aspectos identificados conscientemente y fuera del alcance de la prueba:
 
 ---
 
-## 13. Declaración obligatoria de uso de asistentes de Inteligencia Artificial
+## 14. Declaración obligatoria de uso de asistentes de Inteligencia Artificial
 
 ### 1. Herramientas utilizadas durante el desarrollo
 
