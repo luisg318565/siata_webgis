@@ -26,7 +26,7 @@
   button:hover { background: #3a9640; }
   button.secondary { background: #3a5a8c; }
   button.secondary:hover { background: #4a70ab; }
-  #resultado { padding: 0 16px 16px; font-size: 12.5px; }
+  #resultado, #resumen-general  { padding: 0 16px 16px; font-size: 12.5px; }
   #resultado table { width: 100%; border-collapse: collapse; margin-top: 6px; }
   #resultado td { padding: 3px 4px; border-bottom: 1px solid #333; vertical-align: top; }
   #resultado td.num { text-align: right; white-space: nowrap; }
@@ -35,6 +35,9 @@
   #leyenda-img { max-width: 100%; margin: 0 16px 16px; display: block; border: 1px solid #333; background: #fff; border-radius: 4px; }
   .loading { color: #ffb74d; font-size: 12.5px; padding: 0 16px; }
   .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 1px solid #555; vertical-align: middle; }
+  h2.toggle { cursor: pointer; user-select: none; }
+  h2.toggle:hover { color: #c8f0b8; }
+  #resumen-general.colapsado { display: none; }
 </style>
 </head>
 <body>
@@ -44,15 +47,22 @@
   <p class="hint">Área Metropolitana del Valle de Aburrá. Haz clic en el mapa para analizar la intersección de coberturas en un radio de influencia.</p>
 
   <div class="controls">
+    <label for="opacidad">Opacidad capa de coberturas</label>
+    <input type="range" id="opacidad" min="0" max="1" step="0.05" value="1">
+  </div>
+
+  <div class="controls">
     <label for="radio">Radio de influencia (metros)</label>
     <input type="number" id="radio" value="1000" min="50" max="20000" step="50">
   </div>
 
-  <button id="btn-estadisticas" class="secondary" type="button">Ver estadísticas consolidadas</button>
+    <button id="btn-rectangulo" type="button">Dibujar rectángulo de consulta</button>
 
-  <h2>Resultado de la consulta</h2>
-  <div id="resultado"><p class="hint">Aún no se ha realizado ninguna consulta.</p></div>
+  <h2>Tu consulta</h2>
+  <div id="resultado"><p class="hint">Haz clic en el mapa, o dibuja un rectángulo, para analizar un área de interés.</p></div>
 
+  <h2 class="toggle" id="toggle-general">Resumen general de la capa &#9662;</h2>
+  <div id="resumen-general"><p class="loading">Cargando resumen general...</p></div>
   <h2>Leyenda (CLC &mdash; nivel 3)</h2>
   <img id="leyenda-img" alt="Leyenda de coberturas">
 </div>
@@ -72,11 +82,19 @@
 
   // --- Mapa base, centrado en el Valle de Aburra ---
   const map = L.map('map').setView([6.27, -75.58], 11);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  // --- Mapas base disponibles (el usuario elige cual usar) ---
+  const baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19
-  }).addTo(map);
+  });
+
+
+  const baseSatelital = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri',
+    maxZoom: 19
+  });
+
+  baseOSM.addTo(map);
 
   // --- Capa tematica publicada en GeoServer (WMS), con simbologia oficial ---
   const capaCoberturas = L.tileLayer.wms(GEOSERVER_WMS, {
@@ -87,28 +105,107 @@
     attribution: 'IDEAM - Coberturas CLC 2018 (via GeoServer)'
   }).addTo(map);
 
+  L.control.layers(
+    {
+      'Calles (OSM)': baseOSM,
+      'Satelital (Esri)': baseSatelital
+    },
+    { 'Coberturas CLC': capaCoberturas },
+    { collapsed: true, position: 'topright' }
+  ).addTo(map);
+
   // --- Leyenda oficial, generada automaticamente por GeoServer ---
   document.getElementById('leyenda-img').src =
     `${GEOSERVER_WMS}?service=WMS&request=GetLegendGraphic&layer=siata:coberturas&format=image/png&width=18&height=18&legend_options=fontSize:11`;
 
+  // --- Control de opacidad de la capa de coberturas ---
+  document.getElementById('opacidad').addEventListener('input', (e) => {
+    capaCoberturas.setOpacity(parseFloat(e.target.value));
+  });
   // --- Capa de resultados de la consulta (se limpia en cada clic) ---
   let capaResultado = null;
   let circuloBuffer = null;
   let marcadorClic = null;
 
+  // -----------------------------------------------------------------
+  // Modo alternativo de consulta: dibujar un rectangulo con 2 clics
+  // (esquina inicial y esquina final), en vez de un punto con radio.
+  // -----------------------------------------------------------------
+  let modoDibujo = false;
+  let esquinaInicial = null;
+  let rectanguloPreview = null;
+
+  document.getElementById('btn-rectangulo').addEventListener('click', () => {
+    modoDibujo = true;
+    esquinaInicial = null;
+    if (rectanguloPreview) { map.removeLayer(rectanguloPreview); rectanguloPreview = null; }
+    document.getElementById('resultado').innerHTML =
+      '<p class="loading">Modo rectángulo: haz clic en la primera esquina.</p>';
+  });
+
   map.on('click', async (e) => {
-    const { lat, lng } = e.latlng;
+    if (modoDibujo) {
+      manejarClicModoDibujo(e.latlng);
+      return;
+    }
+    await consultarPorPuntoYRadio(e.latlng);
+  });
+
+  function manejarClicModoDibujo(latlng) {
+    if (!esquinaInicial) {
+      esquinaInicial = latlng;
+      document.getElementById('resultado').innerHTML =
+        '<p class="loading">Ahora haz clic en la esquina opuesta.</p>';
+      return;
+    }
+
+    const bounds = L.latLngBounds(esquinaInicial, latlng);
+    if (rectanguloPreview) map.removeLayer(rectanguloPreview);
+    rectanguloPreview = L.rectangle(bounds, { color: '#1e88e5', weight: 1.5, fillOpacity: 0.05, dashArray: '4,4' }).addTo(map);
+
+    const geojsonRectangulo = boundsAGeoJSON(bounds);
+
+    modoDibujo = false;
+    esquinaInicial = null;
+
+    consultarPorGeometria(geojsonRectangulo);
+  }
+
+  function boundsAGeoJSON(bounds) {
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    return {
+      type: 'Polygon',
+      coordinates: [[
+        [sw.lng, sw.lat], [ne.lng, sw.lat], [ne.lng, ne.lat], [sw.lng, ne.lat], [sw.lng, sw.lat]
+      ]]
+    };
+  }
+
+  async function consultarPorPuntoYRadio(latlng) {
+    const { lat, lng } = latlng;
     const radio = parseFloat(document.getElementById('radio').value) || 1000;
 
     limpiarResultadoAnterior();
     dibujarPuntoYRadio(lat, lng, radio);
     mostrarCargando();
 
+    await ejecutarConsulta({ lat, lon: lng, radio_m: radio });
+  }
+
+  async function consultarPorGeometria(geojsonPolygon) {
+    limpiarResultadoAnterior();
+    mostrarCargando();
+
+    await ejecutarConsulta({ geometria: geojsonPolygon });
+  }
+
+  async function ejecutarConsulta(payload) {
     try {
       const respuesta = await fetch(`${BACKEND_URL}/analisis/interseccion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lat, lon: lng, radio_m: radio })
+        body: JSON.stringify(payload)
       });
 
       if (!respuesta.ok) {
@@ -122,7 +219,7 @@
     } catch (err) {
       mostrarError(err.message);
     }
-  });
+  }
 
   function limpiarResultadoAnterior() {
     if (capaResultado) { map.removeLayer(capaResultado); capaResultado = null; }
@@ -155,24 +252,24 @@
     document.getElementById('resultado').innerHTML = `<p class="loading" style="color:#ff6b6b;">Error: ${msg}</p>`;
   }
 
-  function mostrarResumen(datos) {
-    let filas = datos.features.map(f => {
-      const p = f.properties;
-      return `<tr><td>${p.nivel_3 ?? '(sin nivel_3)'}</td><td class="num">${p.area_ha.toFixed(2)} ha</td></tr>`;
-    }).join('');
+function mostrarResumen(datos) {
+  let filas = datos.resumen_por_clase.map(c => {
+    return `<tr><td>${c.nivel_3 ?? '(sin nivel_3)'}</td><td class="num">${c.area_ha.toFixed(2)} ha</td></tr>`;
+  }).join('');
 
-    document.getElementById('resultado').innerHTML = `
-      <div class="resumen">
-        <div><b>${datos.area_total_ha.toFixed(2)} ha</b> interceptadas</div>
-        <div><b>${datos.cantidad_coberturas}</b> tipos de cobertura</div>
-      </div>
-      <table><tbody>${filas}</tbody></table>
-    `;
-  }
+  document.getElementById('resultado').innerHTML = `
+    <div class="resumen">
+      <div><b>${datos.area_total_ha.toFixed(2)} ha</b> interceptadas</div>
+      <div><b>${datos.cantidad_coberturas}</b> tipos de cobertura</div>
+    </div>
+    <table><tbody>${filas}</tbody></table>
+  `;
+}
 
-  // --- Boton: estadisticas consolidadas de todo el recorte ---
-  document.getElementById('btn-estadisticas').addEventListener('click', async () => {
-    document.getElementById('resultado').innerHTML = '<p class="loading">Cargando estadísticas...</p>';
+  // --- Resumen general de la capa: se carga una sola vez al iniciar,
+  //     vive en su propio contenedor, nunca se pisa con las consultas
+  //     interactivas del usuario. ---
+  async function cargarResumenGeneral() {
     try {
       const respuesta = await fetch(`${BACKEND_URL}/analisis/estadisticas`);
       if (!respuesta.ok) throw new Error(`Error HTTP ${respuesta.status}`);
@@ -182,13 +279,20 @@
         `<tr><td>${c.nivel_3 ?? '(sin nivel_3)'}</td><td class="num">${c.area_ha.toFixed(1)} ha</td><td class="num">${c.porcentaje.toFixed(1)}%</td></tr>`
       ).join('');
 
-      document.getElementById('resultado').innerHTML = `
+      document.getElementById('resumen-general').innerHTML = `
         <div class="resumen">Área total del recorte: <b>${datos.area_total_ha.toFixed(2)} ha</b></div>
         <table><tbody>${filas}</tbody></table>
       `;
     } catch (err) {
-      mostrarError(err.message);
+      document.getElementById('resumen-general').innerHTML =
+        `<p class="loading" style="color:#ff6b6b;">Error cargando resumen: ${err.message}</p>`;
     }
+  }
+
+  cargarResumenGeneral();
+
+  document.getElementById('toggle-general').addEventListener('click', () => {
+    document.getElementById('resumen-general').classList.toggle('colapsado');
   });
 </script>
 </body>

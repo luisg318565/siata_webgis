@@ -57,9 +57,11 @@ def consultar_interseccion(
     interceptadas por un area de interes, y calcula el area REAL de
     interseccion (no el area total de cada poligono) en hectareas.
 
-    El buffer de radio (cuando aplica) se calcula sobre el SRID proyectado
-    (9377), para que la distancia sea correcta en metros -- mismo patron
-    usado para el buffer de incidentes en el proyecto SID.
+    Devuelve tanto los poligonos individuales (para representacion
+    geografica) como un resumen agregado por clase nivel_3 (para
+    reportar cuantos TIPOS de cobertura distintos hay, sumando el area
+    de todos los poligonos de una misma clase -- dos poligonos separados
+    de la misma categoria cuentan como 1 tipo, no 2).
     """
     if geojson is not None:
         filas = db.execute(
@@ -80,9 +82,16 @@ def consultar_interseccion(
         ).mappings().all()
 
     features = []
+    resumen_por_clase: dict[str, float] = {}
     area_total = 0.0
+
     for fila in filas:
-        area_total += float(fila["area_ha"])
+        area_ha = float(fila["area_ha"])
+        area_total += area_ha
+
+        nivel_3 = fila["nivel_3"]
+        resumen_por_clase[nivel_3] = resumen_por_clase.get(nivel_3, 0.0) + area_ha
+
         features.append({
             "type": "Feature",
             "geometry": json.loads(fila["interseccion_geojson"]),
@@ -90,15 +99,22 @@ def consultar_interseccion(
                 "id": fila["id"],
                 "codigo": fila["codigo"],
                 "leyenda": fila["leyenda"],
-                "nivel_3": fila["nivel_3"],
-                "area_ha": float(fila["area_ha"]),
+                "nivel_3": nivel_3,
+                "area_ha": area_ha,
             },
         })
+
+    resumen = sorted(
+        [{"nivel_3": k, "area_ha": round(v, 4)} for k, v in resumen_por_clase.items()],
+        key=lambda r: r["area_ha"],
+        reverse=True,
+    )
 
     return {
         "type": "FeatureCollection",
         "area_total_ha": round(area_total, 4),
-        "cantidad_coberturas": len(features),
+        "cantidad_coberturas": len(resumen),
+        "resumen_por_clase": resumen,
         "features": features,
     }
 

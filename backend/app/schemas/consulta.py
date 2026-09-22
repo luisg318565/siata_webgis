@@ -46,12 +46,17 @@ class CoberturaInterceptada(BaseModel):
     geometry: dict[str, Any]
 
 
+class ResumenCobertura(BaseModel):
+    nivel_3: str | None
+    area_ha: float
+
+
 class InterseccionResponse(BaseModel):
     type: str = "FeatureCollection"
     area_total_ha: float
     cantidad_coberturas: int
+    resumen_por_clase: list[ResumenCobertura]
     features: list[dict[str, Any]]
-
 
 class EstadisticaCobertura(BaseModel):
     nivel_3: str | None
